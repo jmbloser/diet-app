@@ -1,0 +1,15 @@
+{
+  "name": "nourishtrack-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Diet tracking app prototype with Claude vision meal photo analysis",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  }
+}
