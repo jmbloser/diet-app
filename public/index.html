@@ -120,13 +120,15 @@
   .stat .n{font-size:17px;font-weight:800;color:var(--accent-dark);}
   .stat .l{font-size:10.5px;color:var(--text-muted);margin-top:2px;}
 
-  .meal-item{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);}
+  .meal-item{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;}
   .meal-item:last-child{border-bottom:none;}
   .meal-item img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#eee;flex-shrink:0;}
   .meal-item .info{flex:1;min-width:0;}
   .meal-item .info .name{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .meal-item .info .meta{font-size:12px;color:var(--text-muted);margin-top:2px;}
   .meal-item .cal{font-size:13px;font-weight:700;color:var(--accent-dark);white-space:nowrap;}
+  .meal-del-btn{background:none;border:none;color:var(--text-muted);font-size:15px;cursor:pointer;padding:4px;flex-shrink:0;}
+  .meal-del-btn:active{color:var(--danger);}
 
   .empty-state{text-align:center;padding:24px 8px;color:var(--text-muted);}
   .empty-state .em{font-size:30px;margin-bottom:8px;}
@@ -412,6 +414,16 @@
         <button class="btn btn-secondary" onclick="goManualEntry()">Enter manually (no photo)</button>
         <button class="btn btn-ghost" onclick="showView('dashboard')">Cancel</button>
       </div>
+
+      <div class="card">
+        <h3>Quick add</h3>
+        <div id="quickAddItemsPreview"></div>
+        <label style="margin-top:0;">Recent</label>
+        <div class="suggest-list" id="lmRecentChips"></div>
+        <label>Popular</label>
+        <div class="suggest-list" id="lmPopularChips"></div>
+        <button class="btn btn-primary" id="quickAddContinueBtn" style="display:none;" onclick="goToReview()">Continue to review</button>
+      </div>
     </div>
 
     <div id="lm-step-analyzing" style="display:none;">
@@ -460,13 +472,6 @@
           <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="cancelCustomEntry()">Cancel</button>
         </div>
 
-        <div id="quickPickSection" style="margin-top:14px;">
-          <label style="margin-top:0;">Recent</label>
-          <div class="suggest-list" id="recentChips"></div>
-          <label>Popular</label>
-          <div class="suggest-list" id="popularChips"></div>
-        </div>
-
         <div id="pickedItemsPreview" style="margin-top:12px;"></div>
         <button class="btn btn-primary" onclick="goToReview()" id="toReviewBtn" disabled>Continue to review</button>
       </div>
@@ -477,7 +482,7 @@
         <h2>Review & confirm</h2>
         <img id="lmReviewImg" class="preview-photo">
         <div id="reviewItemsList"></div>
-        <button class="btn btn-secondary btn-sm" onclick="showView('logmeal');goBackToClarify();">+ Add another item</button>
+        <button class="btn btn-secondary btn-sm" onclick="goBackToClarify()">+ Add another item</button>
         <div class="totals-strip">
           <div><b id="revCal">0</b>kcal</div>
           <div><b id="revProt">0</b>protein</div>
@@ -490,7 +495,7 @@
           <input type="text" id="mealNameInput" placeholder="e.g. Lunch">
           <button type="button" class="mic-btn" id="mic-mealNameInput" onclick="toggleVoiceInput('mealNameInput','mic-mealNameInput')">🎤</button>
         </div>
-        <button class="btn btn-primary" onclick="saveMeal()">Save meal</button>
+        <button class="btn btn-primary" id="saveMealBtn" onclick="saveMeal()">Save meal</button>
       </div>
     </div>
   </div>
@@ -776,7 +781,8 @@ function round1(n){ return Math.round(n * 10) / 10; }
 
 /* ---------------- VIEW ROUTING ---------------- */
 let currentView = 'onboarding';
-function showView(name){
+function showView(name, opts){
+  opts = opts || {};
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+name).classList.add('active');
   currentView = name;
@@ -787,7 +793,7 @@ function showView(name){
   if(name==='weight') renderWeightView();
   if(name==='progress') renderProgressView();
   if(name==='profile') renderProfileView();
-  if(name==='logmeal') resetMealFlow();
+  if(name==='logmeal' && !opts.skipReset) resetMealFlow();
   window.scrollTo(0,0);
 }
 
@@ -933,13 +939,14 @@ function renderDashboard(){
     list.innerHTML = '<div class="empty-state"><div class="em">🍽️</div><p>No meals logged yet today.<br>Tap the camera button to add one.</p></div>';
   } else {
     list.innerHTML = meals.map(m=>`
-      <div class="meal-item">
-        <img src="${m.photo || ''}" onerror="this.style.display='none'">
+      <div class="meal-item" onclick="editMeal('${m.id}')">
+        ${m.photo ? `<img src="${m.photo}" onerror="this.style.display='none'">` : ''}
         <div class="info">
           <div class="name">${escapeHtml(m.name)}</div>
           <div class="meta">${m.items.map(i=>i.name).join(', ')}</div>
         </div>
         <div class="cal">${Math.round(m.totals.cal)} kcal</div>
+        <button class="meal-del-btn" onclick="event.stopPropagation();deleteMeal('${m.id}')">🗑</button>
       </div>
     `).join('');
   }
@@ -992,6 +999,9 @@ function resetMealFlow(){
   document.getElementById('toReviewBtn').disabled = true;
   document.getElementById('mealNameInput').value='';
   document.getElementById('analyzingMsg').textContent = 'Analyzing your meal photo with Claude…';
+  document.getElementById('saveMealBtn').textContent = 'Save meal';
+  renderQuickPicks();
+  renderPickedItems();
 }
 
 function resetClarifyBanner(){
@@ -1069,7 +1079,8 @@ function startAnalysis(){
   })
   .then(data => {
     const items = Array.isArray(data.items) ? data.items : [];
-    mealFlow.items = items.map(it => ({
+    // append to (don't overwrite) anything already added via Quick Add on the previous screen
+    mealFlow.items = mealFlow.items.concat(items.map(it => ({
       name: it.name || 'Unknown item',
       cal: Number(it.calories)||0,
       protein: Number(it.protein)||0,
@@ -1079,7 +1090,7 @@ function startAnalysis(){
       grams: Number(it.estimatedGrams)||0,
       mult: 1,
       source: 'ai'
-    }));
+    })));
     mealFlow.aiNotes = data.notes || '';
     showClarifyStep({
       confident: !!data.confident,
@@ -1119,7 +1130,6 @@ function showClarifyStep(opts){
   notesBox.innerHTML = mealFlow.aiNotes ? '<div class="banner ok" style="margin-top:-4px;">'+escapeHtml(mealFlow.aiNotes)+'</div>' : '';
 
   renderPickedItems();
-  renderQuickPicks();
 }
 
 function onClarifyInput(){
@@ -1210,12 +1220,12 @@ function popularItems(){
 
 function renderQuickPicks(){
   recentItemsCache = recentItems(8);
-  const recentBox = document.getElementById('recentChips');
+  const recentBox = document.getElementById('lmRecentChips');
   recentBox.innerHTML = recentItemsCache.length
     ? recentItemsCache.map((it,idx)=>`<div class="suggest-chip" onclick="pickRecentItem(${idx})">${escapeHtml(it.name)}</div>`).join('')
     : '<span class="hint-text">Nothing logged yet</span>';
 
-  const popularBox = document.getElementById('popularChips');
+  const popularBox = document.getElementById('lmPopularChips');
   popularBox.innerHTML = popularItems().map(f=>`<div class="suggest-chip" onclick="pickFood('${f.name.replace(/'/g,"\\'")}')">${escapeHtml(f.name)}</div>`).join('');
 }
 
@@ -1232,20 +1242,26 @@ function sourceTag(source){
   return '';
 }
 
+// Items can be picked from either the Log a Meal (Quick Add) screen or the
+// manual-entry (clarify) screen, so keep both preview boxes and both
+// "continue" buttons in sync from a single render.
 function renderPickedItems(){
-  const box = document.getElementById('pickedItemsPreview');
-  if(mealFlow.items.length===0){
-    box.innerHTML='';
-    document.getElementById('toReviewBtn').disabled = true;
-    return;
-  }
-  document.getElementById('toReviewBtn').disabled = false;
-  box.innerHTML = '<label style="margin-top:4px;">Items</label>' + mealFlow.items.map((it,idx)=>`
+  const html = mealFlow.items.length===0 ? '' : '<label style="margin-top:4px;">Items</label>' + mealFlow.items.map((it,idx)=>`
     <div class="item-row">
       <div class="nm">${escapeHtml(it.name)}${sourceTag(it.source)}</div>
       <button class="rm" onclick="removeItem(${idx})">✕</button>
     </div>
   `).join('');
+
+  const clarifyBox = document.getElementById('pickedItemsPreview');
+  if(clarifyBox) clarifyBox.innerHTML = html;
+  const quickAddBox = document.getElementById('quickAddItemsPreview');
+  if(quickAddBox) quickAddBox.innerHTML = html;
+
+  const toReviewBtn = document.getElementById('toReviewBtn');
+  if(toReviewBtn) toReviewBtn.disabled = mealFlow.items.length===0;
+  const quickAddContinueBtn = document.getElementById('quickAddContinueBtn');
+  if(quickAddContinueBtn) quickAddContinueBtn.style.display = mealFlow.items.length>0 ? 'block' : 'none';
 }
 
 function removeItem(idx){
@@ -1255,6 +1271,7 @@ function removeItem(idx){
 
 function goToReview(){
   if(mealFlow.items.length===0) return;
+  document.getElementById('lm-step-photo').style.display='none';
   document.getElementById('lm-step-clarify').style.display='none';
   document.getElementById('lm-step-review').style.display='block';
   const img = document.getElementById('lmReviewImg');
@@ -1360,18 +1377,63 @@ function saveMeal(){
   if(mealFlow.items.length===0) return;
   const totals = computeMealTotals(mealFlow.items);
   const name = document.getElementById('mealNameInput').value.trim() || defaultMealName();
-  const meal = {
-    id: Date.now()+'-'+Math.random().toString(36).slice(2,7),
-    date: todayStr(),
-    time: new Date().toISOString(),
-    name,
-    photo: mealFlow.photo,
-    items: mealFlow.items.map(it=>({name:it.name, cal:it.cal, protein:it.protein, carbs:it.carbs, fat:it.fat, fiber:it.fiber, grams:it.grams||0, mult:it.mult, source:it.source})),
-    totals
-  };
-  state.mealLog.push(meal);
+  const itemsSnapshot = mealFlow.items.map(it=>({name:it.name, cal:it.cal, protein:it.protein, carbs:it.carbs, fat:it.fat, fiber:it.fiber, grams:it.grams||0, mult:it.mult, source:it.source}));
+
+  if(mealFlow.editingMealId){
+    const idx = state.mealLog.findIndex(m=>m.id===mealFlow.editingMealId);
+    if(idx>=0){
+      state.mealLog[idx] = { ...state.mealLog[idx], name, photo: mealFlow.photo, items: itemsSnapshot, totals };
+    }
+  } else {
+    state.mealLog.push({
+      id: Date.now()+'-'+Math.random().toString(36).slice(2,7),
+      date: todayStr(),
+      time: new Date().toISOString(),
+      name,
+      photo: mealFlow.photo,
+      items: itemsSnapshot,
+      totals
+    });
+  }
   saveState();
   showView('dashboard');
+}
+
+function editMeal(id){
+  const meal = state.mealLog.find(m=>m.id===id);
+  if(!meal) return;
+  mealFlow = {
+    photo: meal.photo || null,
+    items: meal.items.map(it=>({
+      name: it.name, cal: it.cal||0, protein: it.protein||0, carbs: it.carbs||0,
+      fat: it.fat||0, fiber: it.fiber||0, grams: it.grams||0, mult: it.mult||1,
+      source: it.source||'custom', expanded:false
+    })),
+    aiNotes: '',
+    editingMealId: id
+  };
+  showView('logmeal', { skipReset:true });
+  document.getElementById('lm-step-photo').style.display='none';
+  document.getElementById('lm-step-analyzing').style.display='none';
+  document.getElementById('lm-step-clarify').style.display='none';
+  document.getElementById('lm-step-review').style.display='block';
+  document.getElementById('mealNameInput').value = meal.name;
+  document.getElementById('saveMealBtn').textContent = 'Update meal';
+  const img = document.getElementById('lmReviewImg');
+  if(mealFlow.photo){
+    img.src = mealFlow.photo;
+    img.style.display = 'block';
+  } else {
+    img.style.display = 'none';
+  }
+  renderReviewItems();
+}
+
+function deleteMeal(id){
+  if(!confirm('Delete this meal entry?')) return;
+  state.mealLog = state.mealLog.filter(m=>m.id!==id);
+  saveState();
+  renderDashboard();
 }
 
 function defaultMealName(){
